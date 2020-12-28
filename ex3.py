@@ -22,21 +22,20 @@ class Doc:
     def get_doc_len(self):
         return sum(self.words_stat.values())
 
-
 class Em:
     K = 10
     LAMBDA = 0.06
-    EPSILON = float('-inf')
+    EPSILON = 10**(-6)
 
     def __init__(self, path_data, path_topics):
         self.data, self.words_stat = self.load_data(path_data)
         self.i2topic, self.topic2i = self.load_topics(path_topics)
 
-        num_topics = len(self.topic2i)
-        num_docs = len(self.data)
-        self.splited_data = self.initial_split(num_topics)
-        self.alpha = self.initialize_alpha(num_topics)
-        self.w = self.initialize_w(num_topics, num_docs)
+        self.num_topics = len(self.topic2i)
+        self.num_docs = len(self.data)
+        self.splited_data = self.initial_split(self.num_topics)
+        self.alpha = self.initialize_alpha(self.num_topics)
+        self.w = self.initialize_w(self.num_topics, self.num_docs)
         print()
 
     def load_data(self, path):
@@ -77,11 +76,32 @@ class Em:
     def get_likelihood(self):
         return 0
 
+    def calculate_w(self, z: np.ndarray):
+        w_matrix = np.ndarray((self.num_topics, self.num_docs), dtype='float64')
+
+        print(f"The vector of the topic of the 0 doc: {len(z[:,0])}. The result is OK? {len(z[:,0]) == self.num_topics}")
+
+        for t, doc in enumerate(self.data):
+            z_doc = z[:, t]
+            m = z_doc.max()
+
+            all_not_zero = 0
+            for i in range(self.num_topics):
+                if z_doc[i] - m < - self.K:
+                    w_matrix[i][t] = 0
+                else:
+                    numerator = e ** (z_doc[i] - m)
+                    all_not_zero += numerator
+                    w_matrix[i][t] = numerator
+            w_matrix[:, t] = w_matrix[:, t] / all_not_zero
+        return w_matrix
+
+
     def initialize_alpha(self, num_topics):
         return np.array([1/num_topics]*num_topics)
 
     def calculate_p(self, num_topics):
-        p_matrix = np.ndarray((num_topics, len(self.words_stat)))
+        p_matrix = np.ndarray((num_topics, len(self.words_stat)), dtype='float64')
 
         # for each topic
         for i in num_topics:
@@ -94,11 +114,7 @@ class Em:
 
                 # for each document
                 for t, doc in enumerate(self.data):
-
-                    n_t_k = 0
-                    if word in doc.words_stat:
-                        n_t_k = doc.words_stat[word]
-
+                    n_t_k = self.get_n_t_k(doc, word)
                     sum_numerator += self.w[i][t]*n_t_k
                     sum_denominator += self.w[i][t]*doc.len
 
@@ -110,7 +126,7 @@ class Em:
         return p_matrix
 
     def calculate_alpha(self):
-        alpha = np.array(len(self.topic2i))
+        alpha = np.zeros(len(self.topic2i))
         for i in range(len(self.topic2i)):
             print(f"topic line length: {len(self.w[i, :])}")
 
@@ -131,7 +147,7 @@ class Em:
         return alpha
 
     def initialize_w(self, num_topics, num_docs):
-        w_matrix = np.ndarray((num_topics, num_docs))
+        w_matrix = np.ndarray((num_topics, num_docs), dtype='float64')
 
         for i in range(num_topics):
             for j in range(num_docs):
@@ -139,16 +155,24 @@ class Em:
                     w_matrix[i][j] = 1
         return w_matrix
 
-    def calculate_z(self, alpha, p):
-        z = np.array(len(self.topic2i))
-        for i in range(len(self.topic2i)):
-            sum_p = 0
-            for k, doc in enumerate(self.data):
-                # sum_p += *np.log(p[i][k])
-                pass
+    def calculate_z(self, alpha: np.array, p: np.ndarray) -> np.ndarray:
+        z_matrix = np.ndarray((self.num_topics, self.num_docs), dtype='float64')
+        for t, doc in enumerate(self.data):
+            for i in range(self.num_topics):
+                for k, word in enumerate(self.words_stat):
+                    n_t_k = self.get_n_t_k(doc, word)
+                    z_matrix[i][t] += n_t_k * np.log(p[i][k])
+                z_matrix[i][t] += np.log(alpha[i])
+        return z_matrix
+
+    def get_n_t_k(self, doc, word):
+        n_t_k = 0
+        if word in doc.words_stat:
+            n_t_k = doc.words_stat[word]
+        return n_t_k
 
     def run_em(self):
-
+        
         return 0
 
 def main():
