@@ -7,11 +7,16 @@ from datetime import datetime
 import logging
 from time import time
 
-now = datetime.now().strftime("%H_%M_%S")
-logging.basicConfig(filename=f"log_{now}", level=logging.INFO)
-logger = logging.getLogger()
+now = datetime.now().strftime("%d_%H_%M_%S")
+file_handler = logging.FileHandler(filename=f"log_{now}")
+stdout_handler = logging.StreamHandler(sys.stdout)
+handlers = [file_handler, stdout_handler]
 
-
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s',
+    handlers=handlers
+)
 class Doc:
     def __init__(self, doc, topics, common_words):
         self.doc = doc
@@ -36,15 +41,17 @@ class Em:
     EPSILON = 10**(-6)
 
     def __init__(self, path_data, path_topics):
-        logger.info("data loaded")
+        self.logger = logging.getLogger()
         self.data, self.words_stat = self.load_data(path_data)
-        logger.info("data loaded")
+        self.logger.info("data loaded")
         self.i2topic, self.topic2i = self.load_topics(path_topics)
-        logger.info("topics loaded")
+        self.logger.info("topics loaded")
         self.num_topics = len(self.topic2i)
         self.num_docs = len(self.data)
         self.splited_data = self.initial_split(self.num_topics)
-        logger.info("init finished")
+        self.voc_len = len(self.words_stat)
+        self.word2index = {word: i for i, word in enumerate(self.words_stat)}
+        self.logger.info("init finished")
 
     def load_data(self, path):
         with open(path) as f:
@@ -97,28 +104,24 @@ class Em:
 
     def calculate_p(self, num_topics, w):
         start = time()
-        p_matrix = np.ndarray((num_topics, len(self.words_stat)), dtype='float64')
-
-        # for each topic
-        for i in range(num_topics):
-
-            sum_numerator = 0
-            sum_denominator = 0
-
-            # for each word
-            for k, word in enumerate(self.words_stat):
-
-                # for each document
-                for t, doc in enumerate(self.data):
-                    n_t_k = self.get_n_t_k(doc, word)
-                    sum_numerator += w[i][t]*n_t_k
-                    sum_denominator += w[i][t]*doc.len
-
-                sum_numerator += self.LAMBDA
-                sum_denominator += self.LAMBDA*len(self.words_stat)
-
-                p_matrix[i][k] = sum_numerator/sum_denominator
-        logger.info(f"time calculate p: {time() - start}")
+        p_matrix = np.zeros((num_topics, len(self.words_stat)), dtype='float64')
+        # for each word
+        self.logger.info(f"the len of word {len(self.words_stat)}")
+        self.logger.info(f"the len of data {len(self.data)}")
+        for t, doc in enumerate(self.data):
+            # dominator = w[:, t] * doc.len + self.LAMBDA * self.voc_len
+            for word in doc.words_stat:
+                word_index = self.word2index[word]
+                # self.logger.info(doc.words_stat[word])
+                p_matrix[:, word_index] += (w[:, t] * doc.words_stat[word])
+        p_matrix += self.LAMBDA
+        dominator =  np.full((self.num_topics), self.LAMBDA * self.voc_len)
+        for t, doc in enumerate(self.data):
+            dominator += (w[:, t] * doc.len)
+        self.logger.info(dominator.shape)
+        for k in range(self.voc_len):
+            p_matrix[:, k] /= dominator
+        self.logger.info(f"time calculate p: {time() - start}")
         return p_matrix
 
     def calculate_alpha(self, w):
@@ -168,27 +171,27 @@ class Em:
         return n_t_k
 
     def run_em(self):
-        logger.info("start em")
+        self.logger.info("start em")
         w = self.initialize_w(self.num_topics, self.num_docs)
-        logger.info("finish initialize w")
+        self.logger.info("finish initialize w")
         alpha = self.initialize_alpha(self.num_topics)
-        logger.info("finish initialize alph")
+        self.logger.info("finish initialize alph")
         p = self.calculate_p(self.num_topics, w)
-        logger.info("finish initialize p")
+        self.logger.info("finish initialize p")
 
         for i in range(3):
-            logger.info(f"start iteration number {str(i)}")
+            self.logger.info(f"start iteration number {str(i)}")
             # E
             z = self.calculate_z(alpha, p)
-            logger.info("finish calculate z")
+            self.logger.info("finish calculate z")
             w = self.calculate_w(z)
-            logger.info("finish calculate w")
+            self.logger.info("finish calculate w")
 
             # M
             alpha = self.calculate_alpha(w)
-            logger.info("finish calculate alpha")
+            self.logger.info("finish calculate alpha")
             p = self.calculate_p(self.num_topics, w)
-            logger.info("finish calculate p")
+            self.logger.info("finish calculate p")
 
     def get_likelihood(self, z):
         sum_l = 0
