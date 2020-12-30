@@ -1,5 +1,6 @@
 # Students	Refael  Greenfeld    Danit   Yshaayahu  305030868   312434269
 import sys
+import os
 from collections import Counter
 import numpy as np
 from math import e
@@ -7,8 +8,11 @@ from datetime import datetime
 import logging
 from time import time
 
+
 now = datetime.now().strftime("%d_%H_%M_%S")
-file_handler = logging.FileHandler(filename=f"log_{now}")
+if not os.path.isdir('logs'):
+    os.mkdir('logs')
+file_handler = logging.FileHandler(filename=os.path.join('logs', f'log_{now}'))
 stdout_handler = logging.StreamHandler(sys.stdout)
 handlers = [file_handler, stdout_handler]
 
@@ -17,6 +21,8 @@ logging.basicConfig(
     format='[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s',
     handlers=handlers
 )
+
+
 class Doc:
     def __init__(self, doc, topics, common_words):
         self.doc = doc
@@ -48,7 +54,6 @@ class Em:
         self.logger.info("topics loaded")
         self.num_topics = len(self.topic2i)
         self.num_docs = len(self.data)
-        self.splited_data = self.initial_split(self.num_topics)
         self.voc_len = len(self.words_stat)
         self.word2index = {word: i for i, word in enumerate(self.words_stat)}
         self.logger.info("init finished")
@@ -71,13 +76,6 @@ class Em:
             topics = lines[0::2]
             topics_dict = {i: top.strip() for i, top in enumerate(topics)}
             return topics_dict, {v: k for k, v in topics_dict.items()}
-
-    def initial_split(self, num_topics):
-        splited_data = [[] for _ in range(num_topics)]
-        for i in range(len(self.data)):
-            mod = i % num_topics
-            splited_data[mod].append(self.data[i])
-        return splited_data
 
     def calculate_w(self, z: np.ndarray):
         w_matrix = np.ndarray((self.num_topics, self.num_docs), dtype='float64')
@@ -105,30 +103,30 @@ class Em:
     def calculate_p(self, num_topics, w):
         start = time()
         p_matrix = np.zeros((num_topics, len(self.words_stat)), dtype='float64')
-        # for each word
         self.logger.info(f"the len of word {len(self.words_stat)}")
         self.logger.info(f"the len of data {len(self.data)}")
+
         for t, doc in enumerate(self.data):
-            # dominator = w[:, t] * doc.len + self.LAMBDA * self.voc_len
             for word in doc.words_stat:
                 word_index = self.word2index[word]
-                # self.logger.info(doc.words_stat[word])
-                p_matrix[:, word_index] += (w[:, t] * doc.words_stat[word])
+                n_t_k = doc.words_stat[word]
+                p_matrix[:, word_index] += (w[:, t] * n_t_k)
         p_matrix += self.LAMBDA
-        dominator =  np.full((self.num_topics), self.LAMBDA * self.voc_len)
+        dominator = np.full(self.num_topics, self.LAMBDA * self.voc_len)
+
         for t, doc in enumerate(self.data):
             dominator += (w[:, t] * doc.len)
-        self.logger.info(dominator.shape)
         for k in range(self.voc_len):
-            p_matrix[:, k] /= dominator
+            try:
+                p_matrix[:, k] /= dominator
+            except Exception as warn:
+                self.logger.error(f"the dominator is {dominator}")
         self.logger.info(f"time calculate p: {time() - start}")
         return p_matrix
 
     def calculate_alpha(self, w):
         alpha = np.zeros(len(self.topic2i))
         for i in range(len(self.topic2i)):
-            print(f"topic line length: {len(w[i, :])}")
-
             alpha_value = np.sum(w[i, :])
             if alpha_value == 0:
                 alpha_value = self.EPSILON
@@ -146,7 +144,7 @@ class Em:
         return alpha
 
     def initialize_w(self, num_topics, num_docs):
-        w_matrix = np.ndarray((num_topics, num_docs), dtype='float64')
+        w_matrix = np.zeros((num_topics, num_docs), dtype='float64')
 
         for i in range(num_topics):
             for j in range(num_docs):
@@ -158,9 +156,10 @@ class Em:
         z_matrix = np.ndarray((self.num_topics, self.num_docs), dtype='float64')
         for t, doc in enumerate(self.data):
             for i in range(self.num_topics):
-                for k, word in enumerate(self.words_stat):
-                    n_t_k = self.get_n_t_k(doc, word)
-                    z_matrix[i][t] += n_t_k * np.log(p[i][k])
+                for word in doc.words_stat:
+                    word_index = self.word2index[word]
+                    n_t_k = doc.words_stat[word]
+                    z_matrix[i][t] += n_t_k * np.log(p[i][word_index])
                 z_matrix[i][t] += np.log(alpha[i])
         return z_matrix
 
