@@ -6,9 +6,11 @@ import numpy as np
 from math import e
 from datetime import datetime
 import logging
-from time import time
+import pandas as pd
+import matplotlib.pyplot as plt
+from collections import defaultdict
 
-
+pd.set_option('display.max_columns', 15)
 now = datetime.now().strftime("%d_%H_%M_%S")
 if not os.path.isdir('logs'):
     os.mkdir('logs')
@@ -17,7 +19,7 @@ stdout_handler = logging.StreamHandler(sys.stdout)
 handlers = [file_handler, stdout_handler]
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s',
     handlers=handlers
 )
@@ -30,6 +32,7 @@ class Doc:
         self.topics = topics
         self.words_stat = self.count_words()
         self.len = self.get_doc_len()
+        self.pred = None
 
     def count_words(self):
         return Counter(self.filtered_doc)
@@ -43,20 +46,18 @@ class Doc:
 
 class Em:
     K = 10
-    LAMBDA = 0.06
+    LAMBDA = 0.15
     EPSILON = 10**(-6)
 
     def __init__(self, path_data, path_topics):
         self.logger = logging.getLogger()
-        self.data, self.words_stat = self.load_data(path_data)
-        self.logger.info("data loaded")
+        self.logger.info(f'The lambda is: {self.LAMBDA}')
+        self.docs, self.words_stat = self.load_data(path_data)
         self.i2topic, self.topic2i = self.load_topics(path_topics)
-        self.logger.info("topics loaded")
         self.num_topics = len(self.topic2i)
-        self.num_docs = len(self.data)
+        self.num_docs = len(self.docs)
         self.voc_len = len(self.words_stat)
         self.word2index = {word: i for i, word in enumerate(self.words_stat)}
-        self.logger.info("init finished")
 
     def load_data(self, path):
         with open(path) as f:
@@ -80,9 +81,7 @@ class Em:
     def calculate_w(self, z: np.ndarray):
         w_matrix = np.ndarray((self.num_topics, self.num_docs), dtype='float64')
 
-        print(f"The vector of the topic of the 0 doc: {len(z[:,0])}. The result is OK? {len(z[:,0]) == self.num_topics}")
-
-        for t, doc in enumerate(self.data):
+        for t, doc in enumerate(self.docs):
             z_doc = z[:, t]
             m = z_doc.max()
 
@@ -101,12 +100,9 @@ class Em:
         return np.array([1/num_topics]*num_topics)
 
     def calculate_p(self, num_topics, w):
-        start = time()
         p_matrix = np.zeros((num_topics, len(self.words_stat)), dtype='float64')
-        self.logger.info(f"the len of word {len(self.words_stat)}")
-        self.logger.info(f"the len of data {len(self.data)}")
 
-        for t, doc in enumerate(self.data):
+        for t, doc in enumerate(self.docs):
             for word in doc.words_stat:
                 word_index = self.word2index[word]
                 n_t_k = doc.words_stat[word]
@@ -114,14 +110,10 @@ class Em:
         p_matrix += self.LAMBDA
         dominator = np.full(self.num_topics, self.LAMBDA * self.voc_len)
 
-        for t, doc in enumerate(self.data):
+        for t, doc in enumerate(self.docs):
             dominator += (w[:, t] * doc.len)
         for k in range(self.voc_len):
-            try:
-                p_matrix[:, k] /= dominator
-            except Exception as warn:
-                self.logger.error(f"the dominator is {dominator}")
-        self.logger.info(f"time calculate p: {time() - start}")
+            p_matrix[:, k] /= dominator
         return p_matrix
 
     def calculate_alpha(self, w):
@@ -153,8 +145,8 @@ class Em:
         return w_matrix
 
     def calculate_z(self, alpha: np.array, p: np.ndarray) -> np.ndarray:
-        z_matrix = np.ndarray((self.num_topics, self.num_docs), dtype='float64')
-        for t, doc in enumerate(self.data):
+        z_matrix = np.zeros((self.num_topics, self.num_docs), dtype='float64')
+        for t, doc in enumerate(self.docs):
             for i in range(self.num_topics):
                 for word in doc.words_stat:
                     word_index = self.word2index[word]
@@ -170,31 +162,72 @@ class Em:
         return n_t_k
 
     def run_em(self):
-        self.logger.info("start em")
         w = self.initialize_w(self.num_topics, self.num_docs)
-        self.logger.info("finish initialize w")
         alpha = self.initialize_alpha(self.num_topics)
-        self.logger.info("finish initialize alph")
         p = self.calculate_p(self.num_topics, w)
-        self.logger.info("finish initialize p")
 
-        for i in range(3):
-            self.logger.info(f"start iteration number {str(i)}")
+        last_liklihood = 0
+        likelihood = 0
+        hist_likelihood = []
+        i = 0
+        while likelihood - last_liklihood > 2 or likelihood == 0 or i == 1:
+            last_liklihood = likelihood
+            self.logger.info(f"start iteration number {str(i+1)}")
             # E
             z = self.calculate_z(alpha, p)
-            self.logger.info("finish calculate z")
             w = self.calculate_w(z)
-            self.logger.info("finish calculate w")
 
             # M
             alpha = self.calculate_alpha(w)
-            self.logger.info("finish calculate alpha")
             p = self.calculate_p(self.num_topics, w)
-            self.logger.info("finish calculate p")
+            likelihood = self.get_likelihood(z)
+            self.logger.info(f"Current likelihood {likelihood}")
+            cluster_res = w.argmax(axis=0)
+
+            perplexity = self.get_perplexity(likelihood)
+            accuracy = self.get_accuracy(cluster_res)
+
+            hist_likelihood.append({'likelihood': likelihood, 'accuracy': accuracy, "perplexity": perplexity})
+            self.logger.info(f'the log likelihood diff is {likelihood - last_liklihood} (should be positive)')
+            self.logger.info(f"Cur accuracy is: {accuracy}")
+            i += 1
+
+        self.plot_confusion(cluster_res)
+        likelihood = pd.DataFrame(hist_likelihood)
+        likelihood['likelihood'].plot()
+        plt.savefig(f"likelihood_{self.LAMBDA}_{now}.jpg")
+        plt.show()
+        plt.close()
+        likelihood['accuracy'].plot()
+        plt.savefig(f"loss_{self.LAMBDA}_{now}.jpg")
+        plt.show()
+        plt.close()
+        likelihood['perplexity'].plot()
+        plt.savefig(f"perplexity_{self.LAMBDA}_{now}.jpg")
+        plt.show()
+
+    def get_accuracy(self, cluster_res):
+        results = defaultdict(list)
+        correct = 0
+        for doc, res in zip(self.docs, cluster_res):
+            results[res].append(doc)
+        c2topic = {}
+        for cluster_i, cluster_docs in results.items():
+            cluster_topics = []
+            for doc in cluster_docs:
+                cluster_topics.extend(doc.topics)
+            counter = Counter(cluster_topics)
+            cluster_topic = counter.most_common(1)[0][0]
+            c2topic[cluster_i] = cluster_topic
+            for doc in cluster_docs:
+                if cluster_topic in doc.topics:
+                    correct +=1
+        self.logger.info(f"the topics cluster are: \n{c2topic}")
+        return correct / len(self.docs)
 
     def get_likelihood(self, z):
         sum_l = 0
-        for t in range(len(self.data)):
+        for t in range(len(self.docs)):
 
             m_t = z[:, t].max()
             sum_ln = 0
@@ -206,8 +239,31 @@ class Em:
 
         return sum_l
 
-    def get_clusters(self):
-        pass
+    def get_perplexity(self, likelihood):
+        return round(e**(-likelihood/len(self.words_stat)), 2)
+
+    def plot_confusion(self, cluster_res):
+        results = defaultdict(list)
+        for doc, res in zip(self.docs, cluster_res):
+            results[res].append(doc)
+
+        sorted_res = sorted(results.values(), key=lambda x: len(x), reverse=True)
+
+        confusion_matrix = []
+        for i, cluster_docs in enumerate(sorted_res):
+            cluster_topics = {topic: 0 for topic in self.topic2i}
+            for doc in cluster_docs:
+                for topic in doc.topics:
+                    cluster_topics[topic] += 1
+            pd.DataFrame(cluster_topics).plot.hist()
+            plt.show()
+            plt.savefig(f'cluster_{i}.jpg')
+            plt.close()
+            cluster_topics['cluster_size'] = len(cluster_docs)
+            confusion_matrix.append(cluster_topics)
+
+        print(pd.DataFrame(confusion_matrix))
+
 
 
 def main():
