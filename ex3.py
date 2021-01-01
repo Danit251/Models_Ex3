@@ -9,6 +9,7 @@ import logging
 import pandas as pd
 import matplotlib.pyplot as plt
 from collections import defaultdict
+import operator
 
 pd.set_option('display.max_columns', 15)
 now = datetime.now().strftime("%d_%H_%M_%S")
@@ -255,7 +256,9 @@ class Em:
             for doc in cluster_docs:
                 for topic in doc.topics:
                     cluster_topics[topic] += 1
-            pd.DataFrame(cluster_topics).plot.hist()
+            df = pd.DataFrame.from_dict(cluster_topics, orient='index')
+            max_topic = max(cluster_topics.items(), key=operator.itemgetter(1))[0]
+            df.plot(kind='bar', title=f"cluster {i} - {max_topic}")
             plt.show()
             plt.savefig(f'cluster_{i}.jpg')
             plt.close()
@@ -263,7 +266,6 @@ class Em:
             confusion_matrix.append(cluster_topics)
 
         print(pd.DataFrame(confusion_matrix))
-
 
 
 def main():
